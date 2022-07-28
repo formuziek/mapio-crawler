@@ -6,6 +6,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
+using System.Text.Unicode;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -30,9 +31,10 @@ namespace Mapio.Crawler
             //"uzn/01_skaits/SRG010.px",
         };
 
-        private static JsonSerializerOptions _options = new JsonSerializerOptions
+        private static JsonSerializerOptions _jsonSerializerOptions = new JsonSerializerOptions
         {
             PropertyNameCaseInsensitive = true,
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.Create(UnicodeRanges.BasicLatin, UnicodeRanges.LatinExtendedA),
         };
 
         /// <summary>
@@ -54,7 +56,7 @@ namespace Mapio.Crawler
                 Method = HttpMethod.Get,
             };
             var baseHttpResponse = await httpClient.SendAsync(baseHttpRequest);
-            var blocks = JsonSerializer.Deserialize<List<Block>>(await baseHttpResponse.Content.ReadAsStringAsync(), _options);
+            var blocks = JsonSerializer.Deserialize<List<Block>>(await baseHttpResponse.Content.ReadAsStringAsync(), _jsonSerializerOptions);
             foreach (var block in blocks)
             {
                 await Task.Delay(2000);
@@ -64,7 +66,7 @@ namespace Mapio.Crawler
                     Method = HttpMethod.Get,
                 };
                 var blockHttpResponse = await httpClient.SendAsync(blockHttpRequest);
-                block.Levels = JsonSerializer.Deserialize<List<Level>>(await blockHttpResponse.Content.ReadAsStringAsync(), _options);
+                block.Levels = JsonSerializer.Deserialize<List<Level>>(await blockHttpResponse.Content.ReadAsStringAsync(), _jsonSerializerOptions);
                 
                 foreach (var level in block.Levels)
                 {
@@ -72,7 +74,7 @@ namespace Mapio.Crawler
                 }
             }
 
-            var data = JsonSerializer.Serialize(blocks, _options);
+            var data = JsonSerializer.Serialize(blocks, _jsonSerializerOptions);
             System.IO.File.WriteAllText("output.json", data);
         }
 
@@ -87,7 +89,7 @@ namespace Mapio.Crawler
                     Method = HttpMethod.Get,
                 };
                 var levelHttpResponse = await httpClient.SendAsync(levelHttpRequest);
-                level.Levels = JsonSerializer.Deserialize<List<Level>>(await levelHttpResponse.Content.ReadAsStringAsync(), _options);
+                level.Levels = JsonSerializer.Deserialize<List<Level>>(await levelHttpResponse.Content.ReadAsStringAsync(), _jsonSerializerOptions);
                 foreach (var subLevel in level.Levels)
                 {
                     await Recurse(subLevel, levelHttpRequest.RequestUri, httpClient);
@@ -102,7 +104,7 @@ namespace Mapio.Crawler
                     Method = HttpMethod.Get,
                 };
                 var tableHttpResponse = await httpClient.SendAsync(tableHttpRequest);
-                level.Table = JsonSerializer.Deserialize<Table>(await tableHttpResponse.Content.ReadAsStringAsync(), _options);
+                level.Table = JsonSerializer.Deserialize<Table>(await tableHttpResponse.Content.ReadAsStringAsync(), _jsonSerializerOptions);
             }
         }
 
@@ -131,7 +133,12 @@ namespace Mapio.Crawler
 
                 var httpResponse = await httpClient.SendAsync(httpRequest);
 
-                var response = JsonSerializer.Deserialize<Response>(await httpResponse.Content.ReadAsStringAsync());
+                // For the purposes of not spamming CSB - "caching" the response.
+                // await System.IO.File.WriteAllTextAsync("local.json", await httpResponse.Content.ReadAsStringAsync());
+                // var response = JsonSerializer.Deserialize<Response>(await System.IO.File.ReadAllTextAsync("local.json"), _jsonSerializerOptions);
+
+                var response = JsonSerializer.Deserialize<Response>(await httpResponse.Content.ReadAsStringAsync(), _jsonSerializerOptions);
+
                 var quarters = ExtractQuarters(response);
                 var firstYearQuarters = ExtractFirstYearQuarters(response);
                 var lastYearQuarters = ExtractLastYearQuarters(response);
@@ -162,22 +169,22 @@ namespace Mapio.Crawler
                 DataSetConfigurations = configurationValues,
             };
 
-            await System.IO.File.WriteAllTextAsync("testResponse.json", JsonSerializer.Serialize(configurationRoot), Encoding.UTF8);
+            await System.IO.File.WriteAllTextAsync("testResponse.json", JsonSerializer.Serialize(configurationRoot, _jsonSerializerOptions), Encoding.UTF8);
         }
 
         private static List<string> GetYears(Response response)
         {
-            var yearVariable = response.Variables.FirstOrDefault(item => item.Code == "Gads" || item.Code == "Gads/Ceturksnis");
-            switch (yearVariable?.Code)
-            {
-                case "Gads":
-                    return yearVariable.Values.Where(value => long.Parse(value) >= 2009).ToList();
-                case "Gads/Ceturksnis":
-                    return yearVariable.Values.Where(value => long.Parse(value.Substring(0, 4)) >= 2009).Select(value => value.Substring(0, 4)).Distinct().ToList();
-                case null:
-                default:
-                    return new List<string>();
-            }
+            var yearVariable = response.Variables.FirstOrDefault(item => item.Code == "TIME");
+            return yearVariable.Values.Where(value => long.Parse(value) >= 2009).ToList();
+            //switch (yearVariable?.Code)
+            //{
+            //    case "Gads":
+            //    case "Gads/Ceturksnis":
+            //        return yearVariable.Values.Where(value => long.Parse(value.Substring(0, 4)) >= 2009).Select(value => value.Substring(0, 4)).Distinct().ToList();
+            //    case null:
+            //    default:
+            //        return new List<string>();
+            //}
         }
 
         private static List<string> ExtractQuarters(Response response)
@@ -225,7 +232,7 @@ namespace Mapio.Crawler
 
         private static List<(string Title, string Code)> ExtractSubItems(Response response)
         {
-            var titleVariable = response.Variables.FirstOrDefault(item => item.Code == "Rādītāji" || item.Code == "Tirgus sektora un ārpus tirgus sektora uzņēmumi" || item.Code == "Sektors");
+            var titleVariable = response.Variables.FirstOrDefault(item => item.Code == "INDICATOR" || item.Code == "Tirgus sektora un ārpus tirgus sektora uzņēmumi" || item.Code == "Sektors");
             var secondaryTitle = response.Variables.FirstOrDefault(item => item.Code == "Bruto/ Neto");
             if (titleVariable is null)
             {
@@ -259,30 +266,47 @@ namespace Mapio.Crawler
             foreach (var variable in response.Variables)
             {
                 var entry = new List<string>();
-                if (variable.Code == "Gads" || variable.Code == "Gads/Ceturksnis")
-                {
-                    entry.Add("TIME");
-                }
-                else if (variable.Code == "Rādītāji" || variable.Code == "Tirgus sektora un ārpus tirgus sektora uzņēmumi")
+                if (variable.Code == "INDICATOR")
                 {
                     entry.Add(subItem.Code);
                 }
-                else if (variable.Code == "Sektors")
-                {
-                    entry.Add(subItem.Code.Split('#')[0]);
-                }
-                else if (variable.Code == "Bruto/ Neto")
-                {
-                    entry.Add(subItem.Code.Split('#')[1]);
-                }
-                else if (variable.Code == "Teritoriālā vienība" || variable.Code == "Administratīvā teritorija")
+                else if (variable.Code == "AREA")
                 {
                     entry.Add("AREA");
+                }
+                else if (variable.Code == "TIME")
+                {
+                    entry.Add("TIME");
                 }
                 else
                 {
                     entry.AddRange(variable.Values);
                 }
+
+                //if (variable.Code == "Gads" || variable.Code == "Gads/Ceturksnis")
+                //{
+                //    entry.Add("TIME");
+                //}
+                //else if (variable.Code == "Rādītāji" || variable.Code == "Tirgus sektora un ārpus tirgus sektora uzņēmumi")
+                //{
+                //    entry.Add(subItem.Code);
+                //}
+                //else if (variable.Code == "Sektors")
+                //{
+                //    entry.Add(subItem.Code.Split('#')[0]);
+                //}
+                //else if (variable.Code == "Bruto/ Neto")
+                //{
+                //    entry.Add(subItem.Code.Split('#')[1]);
+                //}
+                //else if (variable.Code == "Teritoriālā vienība" || variable.Code == "Administratīvā teritorija")
+                //{
+                //    entry.Add("AREA");
+                //}
+                //else
+                //{
+                //    entry.AddRange(variable.Values);
+                //}
                 result.Add(entry);
             }
 
