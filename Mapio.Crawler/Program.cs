@@ -22,7 +22,7 @@ namespace Mapio.Crawler
         private static readonly List<(string Uri, string Version)> Uris = new List<(string, string)>
         {
             ("POP/IR/IRS/IRS030", "BEFORE_2021_ATR"),
-            ("POP/IR/IRS/IRS030", "AFTER_2021_ATR"),
+            ("POP/IR/IRS/IRS031", "AFTER_2021_ATR"),
             //"iedz/iedzskaits/ikgad/ISG020.px",
             //"sociala/dsamaksa/isterm/DS100c.px",
             //"iedz/dzimst/IDG140.px",
