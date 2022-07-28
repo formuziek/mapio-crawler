@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.1.32328.378
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Mapio.Crawler", "Mapio.Crawler\Mapio.Crawler.csproj", "{DCB659C3-4B73-4844-8CB7-3C804E5B0D12}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Mapio.Dto", "Mapio.Dto\Mapio.Dto.csproj", "{B70E608C-E928-492D-92C0-41AAB02EA7C7}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{DCB659C3-4B73-4844-8CB7-3C804E5B0D12}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DCB659C3-4B73-4844-8CB7-3C804E5B0D12}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DCB659C3-4B73-4844-8CB7-3C804E5B0D12}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DCB659C3-4B73-4844-8CB7-3C804E5B0D12}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B70E608C-E928-492D-92C0-41AAB02EA7C7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B70E608C-E928-492D-92C0-41AAB02EA7C7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B70E608C-E928-492D-92C0-41AAB02EA7C7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B70E608C-E928-492D-92C0-41AAB02EA7C7}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {E1800E44-D158-4671-AA88-72E1A5294BC0}
+	EndGlobalSection
+EndGlobal
