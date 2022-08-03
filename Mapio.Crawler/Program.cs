@@ -156,26 +156,24 @@ namespace Mapio.Crawler
                     return;
                 }
 
-                bool containsAreaCodes = false;
-                bool containsNewAreaCodes = false;
+                bool containsAreaCodes = true;
+                bool containsNewAreaCodes = true;
                 foreach (var aCodeOld in Enum.GetNames(typeof(AdministrativeCodes)))
                 {
                     if (!areaCode.Values.Contains(aCodeOld))
                     {
+                        containsAreaCodes = false;
                         break;
                     }
-
-                    containsAreaCodes = true;
                 }
 
                 foreach (var aCodeNew in Enum.GetNames(typeof(AdministrativeCodes2021)))
                 {
                     if (!areaCode.Values.Contains(aCodeNew))
                     {
+                        containsNewAreaCodes = false;
                         break;
                     }
-
-                    containsNewAreaCodes = true;
                 }
 
                 if (!containsAreaCodes && !containsNewAreaCodes)
@@ -221,7 +219,11 @@ namespace Mapio.Crawler
 
                 if (mappedVariable.Code == "TIME")
                 {
-                    mappedVariable.ValueItems.RemoveAll(x => int.Parse(x.Value) < 2009);
+                    mappedVariable.ValueItems.RemoveAll(x => !int.TryParse(x.Value, out int year) || year < 2009);
+                    if (mappedVariable.ValueItems.Count == 0)
+                    {
+                        continue;
+                    }
                 }
 
                 output.Add(mappedVariable);
