@@ -1,5 +1,7 @@
 ﻿using Mapio.Crawler.Dto;
 using Mapio.Dto.Configuration;
+using Mapio.Dto.Enums;
+using Mapio.Shared.Enums;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -14,22 +16,13 @@ namespace Mapio.Crawler
 {
     public class Program
     {
-        private const string _rootUri = "https://data.stat.gov.lv/api/v1/lv/OSP_PUB/";
-
         /// <summary>
-        /// Predefined Uris which contain manually picked data.
+        /// Switch for disabling crawling.
         /// </summary>
-        private static readonly List<(string Uri, string Version)> Uris = new List<(string, string)>
-        {
-            ("POP/IR/IRS/IRS030", "BEFORE_2021_ATR"),
-            ("POP/IR/IRS/IRS031", "AFTER_2021_ATR"),
-            //"iedz/iedzskaits/ikgad/ISG020.px",
-            //"sociala/dsamaksa/isterm/DS100c.px",
-            //"iedz/dzimst/IDG140.px",
-            //"iedz/mirst/IMG081.px",
-            //"iedz/laulibas/ikgad/ILG020.px",
-            //"uzn/01_skaits/SRG010.px",
-        };
+        private static bool _offlineMode = true;
+
+        private const string _rootUri = "https://data.stat.gov.lv/api/v1/lv/OSP_PUB/";
+        private static List<DataSet> _filterOutput = new List<DataSet>();
 
         private static JsonSerializerOptions _jsonSerializerOptions = new JsonSerializerOptions
         {
@@ -38,13 +31,15 @@ namespace Mapio.Crawler
         };
 
         /// <summary>
-        /// The next (WIP) iteration of the script, intent is for it to actually crawl through the entire API and find valid datasets.
+        /// The crawl script. From the API base crawls through all indexed endpoints and gathers all tables.
         /// </summary>
-        /// <remarks>
-        /// Valid dataset - mappable data, i.e. data can be searched for all counties, before or after ATR.
-        /// </remarks>
-        public static async Task AltMain()
+        public static async Task<List<Block>> Crawl()
         {
+            if (_offlineMode)
+            {
+                return null;
+            }
+
             var httpClient = new HttpClient
             {
                 BaseAddress = new Uri(_rootUri),
@@ -59,53 +54,180 @@ namespace Mapio.Crawler
             var blocks = JsonSerializer.Deserialize<List<Block>>(await baseHttpResponse.Content.ReadAsStringAsync(), _jsonSerializerOptions);
             foreach (var block in blocks)
             {
+                // Avoiding too many requests.
                 await Task.Delay(2000);
                 var blockHttpRequest = new HttpRequestMessage
                 {
-                    RequestUri = new Uri(httpClient.BaseAddress, block.DbId),
+                    RequestUri = new Uri(httpClient.BaseAddress, block.Id),
                     Method = HttpMethod.Get,
                 };
                 var blockHttpResponse = await httpClient.SendAsync(blockHttpRequest);
-                block.Levels = JsonSerializer.Deserialize<List<Level>>(await blockHttpResponse.Content.ReadAsStringAsync(), _jsonSerializerOptions);
+                block.Children = JsonSerializer.Deserialize<List<Block>>(await blockHttpResponse.Content.ReadAsStringAsync(), _jsonSerializerOptions);
                 
-                foreach (var level in block.Levels)
+                foreach (var child in block.Children)
                 {
-                    await Recurse(level, blockHttpRequest.RequestUri, httpClient);
+                    await Recurse(child, blockHttpRequest.RequestUri, httpClient);
                 }
             }
 
+            // Serializing and storing raw crawl output in case we want to run filter later without waiting for the indexing.
             var data = JsonSerializer.Serialize(blocks, _jsonSerializerOptions);
-            System.IO.File.WriteAllText("output.json", data);
+            System.IO.File.WriteAllText("rawBlocks.json", data);
+
+            return blocks;
         }
 
-        private static async Task Recurse(Level level, Uri lastUri, HttpClient httpClient)
+        private static async Task Recurse(Block child, Uri lastUri, HttpClient httpClient)
         {
+            // Avoiding too many requests.
             await Task.Delay(2000);
-            if (level.Type == "l")
+
+            // If the type is "l" (Level, probably), moving to next children.
+            if (child.Type == "l")
             {
                 var levelHttpRequest = new HttpRequestMessage
                 {
-                    RequestUri = new Uri($"{lastUri.OriginalString}/{level.Id}"),
+                    RequestUri = new Uri($"{lastUri.OriginalString}/{child.Id}"),
                     Method = HttpMethod.Get,
                 };
                 var levelHttpResponse = await httpClient.SendAsync(levelHttpRequest);
-                level.Levels = JsonSerializer.Deserialize<List<Level>>(await levelHttpResponse.Content.ReadAsStringAsync(), _jsonSerializerOptions);
-                foreach (var subLevel in level.Levels)
+                child.Children = JsonSerializer.Deserialize<List<Block>>(await levelHttpResponse.Content.ReadAsStringAsync(), _jsonSerializerOptions);
+                foreach (var subLevel in child.Children)
                 {
                     await Recurse(subLevel, levelHttpRequest.RequestUri, httpClient);
                 }
             }
 
-            if (level.Type == "t")
+            // If the type is "t" (Table), we have hit the target, mapping the data and finishing.
+            if (child.Type == "t")
             {
                 var tableHttpRequest = new HttpRequestMessage
                 {
-                    RequestUri = new Uri($"{lastUri.OriginalString}/{level.Id}"),
+                    RequestUri = new Uri($"{lastUri.OriginalString}/{child.Id}"),
                     Method = HttpMethod.Get,
                 };
                 var tableHttpResponse = await httpClient.SendAsync(tableHttpRequest);
-                level.Table = JsonSerializer.Deserialize<Table>(await tableHttpResponse.Content.ReadAsStringAsync(), _jsonSerializerOptions);
+                child.Table = JsonSerializer.Deserialize<Response>(await tableHttpResponse.Content.ReadAsStringAsync(), _jsonSerializerOptions);
             }
+        }
+
+        /// <summary>
+        /// Filters the raw output to finish with valid blocks only, mapped to web format.
+        /// </summary>
+        /// <remarks>
+        /// Valid blocks - the blocks which contain area data which web can use.
+        /// Web format - slightly simplified format with some additional information for web.
+        /// </remarks>
+        public static async Task Filter(List<Block> blocks)
+        {
+            if (blocks == null)
+            {
+                var dataRaw = await System.IO.File.ReadAllTextAsync("rawBlocks.json");
+                blocks = JsonSerializer.Deserialize<List<Block>>(dataRaw, _jsonSerializerOptions);
+            }
+
+            foreach (var block in blocks)
+            {
+                foreach (var child in block.Children)
+                {
+                    RecurseFilter(child, string.Empty);
+                }
+            }
+
+            System.IO.File.WriteAllText("filteredBlocks.json", JsonSerializer.Serialize(_filterOutput, _jsonSerializerOptions));
+        }
+
+        private static void RecurseFilter(Block block, string previousUri)
+        {
+            if (block.Type == "l")
+            {
+                foreach (var child in block.Children)
+                {
+                    RecurseFilter(child, string.Join("/", previousUri, block.Id));
+                }
+            }
+
+            if (block.Type == "t")
+            {
+                string uri = string.Join("/", previousUri, block.Id);
+                var areaCode = block.Table.Variables.FirstOrDefault(c => c.Code == "AREA");
+                if (areaCode == null || areaCode.Values == null)
+                {
+                    return;
+                }
+
+                bool containsAreaCodes = false;
+                bool containsNewAreaCodes = false;
+                foreach (var aCodeOld in Enum.GetNames(typeof(AdministrativeCodes)))
+                {
+                    if (!areaCode.Values.Contains(aCodeOld))
+                    {
+                        break;
+                    }
+
+                    containsAreaCodes = true;
+                }
+
+                foreach (var aCodeNew in Enum.GetNames(typeof(AdministrativeCodes2021)))
+                {
+                    if (!areaCode.Values.Contains(aCodeNew))
+                    {
+                        break;
+                    }
+
+                    containsNewAreaCodes = true;
+                }
+
+                if (!containsAreaCodes && !containsNewAreaCodes)
+                {
+                    return;
+                }
+
+                var dataSet = new DataSet
+                {
+                    Version = containsNewAreaCodes ? "AFTER_2021_ATR" : "BEFORE_2021_ATR",
+                    Text = block.Text,
+                    Uri = uri,
+                    Variables = MapVariables(block.Table.Variables),
+                };
+
+                _filterOutput.Add(dataSet);
+            }
+        }
+
+        private static List<Mapio.Dto.Configuration.Variable> MapVariables(List<Dto.Variable> variables)
+        {
+            var output = new List<Mapio.Dto.Configuration.Variable>();
+            foreach (var variable in variables)
+            {
+                var mappedVariable = new Mapio.Dto.Configuration.Variable
+                {
+                    Code = variable.Code,
+                    Text = variable.Text,
+                };
+
+                var valueItems = new List<ValueItem>();
+                for (int i = 0; i < variable.Values.Count; i++)
+                {
+                    valueItems.Add(new ValueItem { Text = variable.ValueTexts[i], Value = variable.Values[i] });
+                }
+
+                mappedVariable.ValueItems = valueItems;
+
+                if (mappedVariable.Code == "AREA")
+                {
+                    mappedVariable.ValueItems = null;
+                }
+
+                if (mappedVariable.Code == "TIME")
+                {
+                    mappedVariable.ValueItems.RemoveAll(x => int.Parse(x.Value) < 2009);
+                }
+
+                output.Add(mappedVariable);
+            }
+
+            return output;
         }
 
         /// <summary>
@@ -113,204 +235,11 @@ namespace Mapio.Crawler
         /// </summary>
         public static async Task Main(string[] args)
         {
-            // Switch for alt mode.
-            //await AltMain();
-            //return;
+            var blocks = await Crawl();
 
-            var httpClient = new HttpClient
-            {
-                BaseAddress = new Uri(_rootUri),
-            };
+            await Filter(blocks);
 
-            var configurationValues = new List<DataSetConfiguration>();
-            foreach (var uri in Uris)
-            {
-                var httpRequest = new HttpRequestMessage
-                {
-                    RequestUri = new Uri(httpClient.BaseAddress, uri.Uri),
-                    Method = HttpMethod.Get,
-                };
-
-                var httpResponse = await httpClient.SendAsync(httpRequest);
-
-                // For the purposes of not spamming CSB - "caching" the response.
-                // await System.IO.File.WriteAllTextAsync("local.json", await httpResponse.Content.ReadAsStringAsync());
-                // var response = JsonSerializer.Deserialize<Response>(await System.IO.File.ReadAllTextAsync("local.json"), _jsonSerializerOptions);
-
-                var response = JsonSerializer.Deserialize<Response>(await httpResponse.Content.ReadAsStringAsync(), _jsonSerializerOptions);
-
-                var quarters = ExtractQuarters(response);
-                var firstYearQuarters = ExtractFirstYearQuarters(response);
-                var lastYearQuarters = ExtractLastYearQuarters(response);
-                var subItems = ExtractSubItems(response);
-                foreach (var item in subItems)
-                {
-                    configurationValues.Add(new DataSetConfiguration
-                    {
-                        Version = uri.Version,
-                        Uri = uri.Uri,
-                        QuerySections = response.Variables.Select(item => item.Code).ToList(),
-                        QueryValues = GetQueryValues(response, item),
-                        Years = GetYears(response),
-                        Quarters = quarters,
-                        IsQuarterly = quarters.Any(),
-                        TextLat = item.Title,
-                        TextEng = GetTranslation(item.Title),
-                        FirstYearQuarters = ExtractFirstYearQuarters(response),
-                        LastYearQuarters = ExtractLastYearQuarters(response),
-                    });
-                }
-
-                await Task.Delay(2000); // Sleep to avoid too many requests response.
-            };
-
-            var configurationRoot = new DataSetConfigurationRoot
-            {
-                DataSetConfigurations = configurationValues,
-            };
-
-            await System.IO.File.WriteAllTextAsync("testResponse.json", JsonSerializer.Serialize(configurationRoot, _jsonSerializerOptions), Encoding.UTF8);
-        }
-
-        private static List<string> GetYears(Response response)
-        {
-            var yearVariable = response.Variables.FirstOrDefault(item => item.Code == "TIME");
-            return yearVariable.Values.Where(value => long.Parse(value) >= 2009).ToList();
-            //switch (yearVariable?.Code)
-            //{
-            //    case "Gads":
-            //    case "Gads/Ceturksnis":
-            //        return yearVariable.Values.Where(value => long.Parse(value.Substring(0, 4)) >= 2009).Select(value => value.Substring(0, 4)).Distinct().ToList();
-            //    case null:
-            //    default:
-            //        return new List<string>();
-            //}
-        }
-
-        private static List<string> ExtractQuarters(Response response)
-        {
-            var quarterVariable = response.Variables.FirstOrDefault(item => item.Code == "Gads/Ceturksnis");
-            switch (quarterVariable?.Code)
-            {
-                case "Gads/Ceturksnis":
-                    return quarterVariable.Values.Select(value => value.Substring(4, 2)).Distinct().ToList();
-                default:
-                    return new List<string>();
-            }
-        }
-
-        private static string GetTranslation(string lat)
-        {
-            return lat;
-        }
-
-        private static List<string> ExtractFirstYearQuarters(Response response)
-        {
-            var quarters = new List<string> { "Q1", "Q2", "Q3", "Q4" };
-            var yearQuarterVariable = response.Variables.FirstOrDefault(item => item.Code == "Gads/Ceturksnis");
-            switch (yearQuarterVariable?.Code)
-            {
-                case "Gads/Ceturksnis":
-                    return quarters.Where(q => quarters.IndexOf(q) >= quarters.IndexOf(yearQuarterVariable.Values.First().Substring(4, 2))).ToList();
-                default:
-                    return null;
-            }
-        }
-
-        private static List<string> ExtractLastYearQuarters(Response response)
-        {
-            var quarters = new List<string> { "Q1", "Q2", "Q3", "Q4" };
-            var yearQuarterVariable = response.Variables.FirstOrDefault(item => item.Code == "Gads/Ceturksnis");
-            switch (yearQuarterVariable?.Code)
-            {
-                case "Gads/Ceturksnis":
-                    return quarters.Where(q => quarters.IndexOf(q) <= quarters.IndexOf(yearQuarterVariable.Values.Last().Substring(4, 2))).ToList();
-                default:
-                    return null;
-            }
-        }
-
-        private static List<(string Title, string Code)> ExtractSubItems(Response response)
-        {
-            var titleVariable = response.Variables.FirstOrDefault(item => item.Code == "INDICATOR" || item.Code == "Tirgus sektora un ārpus tirgus sektora uzņēmumi" || item.Code == "Sektors");
-            var secondaryTitle = response.Variables.FirstOrDefault(item => item.Code == "Bruto/ Neto");
-            if (titleVariable is null)
-            {
-                return new List<(string Title, string Code)>
-                {
-                    (response.Title, string.Empty),
-                };
-            }
-
-            var result = new List<(string, string)>();
-            for (int i = 0; i < titleVariable.Values.Count; i++)
-            {
-                if (secondaryTitle != null)
-                {
-                    for (int j = 0; j < secondaryTitle.Values.Count; j++)
-                    {
-                        result.Add(($"{titleVariable.ValueTexts[i]} {secondaryTitle.ValueTexts[j]}", $"{titleVariable.Values[i]}#{secondaryTitle.Values[j]}"));
-                    }
-                }
-                else
-                {
-                    result.Add((titleVariable.ValueTexts[i], titleVariable.Values[i]));
-                }
-            }
-            return result;
-        }
-
-        private static List<List<string>> GetQueryValues(Response response, (string Title, string Code) subItem)
-        {
-            var result = new List<List<string>>();
-            foreach (var variable in response.Variables)
-            {
-                var entry = new List<string>();
-                if (variable.Code == "INDICATOR")
-                {
-                    entry.Add(subItem.Code);
-                }
-                else if (variable.Code == "AREA")
-                {
-                    entry.Add("AREA");
-                }
-                else if (variable.Code == "TIME")
-                {
-                    entry.Add("TIME");
-                }
-                else
-                {
-                    entry.AddRange(variable.Values);
-                }
-
-                //if (variable.Code == "Gads" || variable.Code == "Gads/Ceturksnis")
-                //{
-                //    entry.Add("TIME");
-                //}
-                //else if (variable.Code == "Rādītāji" || variable.Code == "Tirgus sektora un ārpus tirgus sektora uzņēmumi")
-                //{
-                //    entry.Add(subItem.Code);
-                //}
-                //else if (variable.Code == "Sektors")
-                //{
-                //    entry.Add(subItem.Code.Split('#')[0]);
-                //}
-                //else if (variable.Code == "Bruto/ Neto")
-                //{
-                //    entry.Add(subItem.Code.Split('#')[1]);
-                //}
-                //else if (variable.Code == "Teritoriālā vienība" || variable.Code == "Administratīvā teritorija")
-                //{
-                //    entry.Add("AREA");
-                //}
-                //else
-                //{
-                //    entry.AddRange(variable.Values);
-                //}
-                result.Add(entry);
-            }
-
-            return result;
+            return;
         }
     }
 }

@@ -3,17 +3,16 @@ using System.Diagnostics;
 
 namespace Mapio.Crawler.Dto
 {
-    [DebuggerDisplay("{DebugDisplay}")]
     public class Block
     {
-        public string DbId { get; set; }
+        public string Id { get; set; }
+
+        public string Type { get; set; }
 
         public string Text { get; set; }
 
-        public List<Level> Levels { get; set; } = new List<Level>();
+        public List<Block> Children { get; set; } = new List<Block>();
 
-        public string DebugDisplay => this.ToString();
-
-        public override string ToString() => $"DbID {this.DbId}";
+        public Response Table { get; set; }
     }
 }
